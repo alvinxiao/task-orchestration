@@ -76,19 +76,6 @@ Browser UI, REST service, asynchronous jobs, persistence, authentication, deploy
 
 These scope boundaries were accepted with the specification for the first runnable Python project.
 
-## Replanning Amendment
-
-Added after the strict-priority milestone: operational replanning when jobs arrive while others run, preserving the strict priority policy and the single public solve operation. The original scope deferred "live replanning"; this amendment accepts it.
-
-- `PlanningRequest.replanning` is an optional typed `ReplanningContext` defaulting to `current_time=0` with empty records, so old requests validate and solve unchanged, including the stage list.
-- Named data shape: `ReplanningContext` with `current_time`, `completed_task_ids`, `in_progress` (`task_id`, `employee_id`, `actual_start`, `remaining_minutes`), `committed` (`task_id`, `employee_id`, `start`), and `previous_assignments` (`task_id`, `employee_id`, `start`). All minute fields are strict integers with nonnegative bounds; `remaining_minutes` is positive.
-- Completed IDs must refer to tasks retained in the request; completed tasks are excluded from assignments, unassigned entries, and every objective. Completed work contributes nothing to priority totals or fairness.
-- In-progress tasks keep their employee and actual start in the output, finish at `current_time + remaining_minutes`, and are distinguished from remaining work in the output (`duration` is the remaining minutes). The employee reserves `[current_time, current_time + remaining_minutes]`, not the original duration. Priority completion sums include the fixed finish; fairness counts only remaining minutes for in-progress work and full duration for pending and committed work, never elapsed minutes. Skills may be grandfathered for running work since it started under the old policy, but the employee must exist, and an employee has at most one in-progress task.
-- Committed tasks fix employee and future start (at or after `current_time`); duration is the affinity-based duration and the fixed employee must still be eligible. Pending tasks start at or after `max(current_time, earliest_start)`. Fixed intervals (in-progress and committed) may not overlap on one employee. Duplicate IDs in records, tasks in more than one execution state, unknown task or employee references, and invalid starts are rejected at the input boundary.
-- The horizon derives from `current_time`, fixed finishes, and pending releases plus durations, with the existing CP-SAT integer-limit guards, including the stability stage's bounded domain.
-- With `previous_assignments`, one final STABILITY stage runs after all four priority stages and the fairness stage are proven and locked, minimizing the count of previous pending tasks whose employee or start changed, one change per task, not duration weighted. With no previous assignments the stage is skipped or proven zero. Changes and explicit metrics (`changed_tasks`, `unchanged_tasks`, the change list) are reported on the result. Previously completed, in-progress, and committed tasks are not stability-tracked.
-- Stage locking now covers fairness as well as the four priorities, so no later stage can trade away a locked fairness optimum. The provisional and last-incumbent semantics and the single shared time budget are unchanged.
-
 ## Further Notes
 
 The configured issue tracker is alvinxiao/task-orchestration on GitHub. Publish this approved specification with the ready-for-agent label.

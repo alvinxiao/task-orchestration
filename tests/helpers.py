@@ -7,7 +7,6 @@ from task_orchestration import (
     Customer,
     Employee,
     PlanningRequest,
-    ReplanningContext,
     SolveOptions,
     Task,
     TaskType,
@@ -17,13 +16,12 @@ from task_orchestration import (
 AFFINITY_MULTIPLIER = {"NONE": 4, "LOW": 3, "MEDIUM": 2, "HIGH": 1}
 PRIORITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
-def make_request(employees, customers, task_types, tasks, time_limit=10.0, replanning=None):
+def make_request(employees, customers, task_types, tasks, time_limit=10.0):
     return PlanningRequest(
         employees=employees,
         customers=customers,
         task_types=task_types,
         tasks=tasks,
-        replanning=replanning if replanning is not None else ReplanningContext(),
         options=SolveOptions(time_limit_seconds=time_limit),
     )
 

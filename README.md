@@ -85,60 +85,6 @@ the time limit is positive. Priorities accept CRITICAL, HIGH, MEDIUM, LOW, and
 the legacy aliases MAJOR (HIGH) and MINOR (LOW). Invalid data raises
 field-specific validation errors before the solver runs.
 
-## Replanning
-
-When jobs arrive while others are running, attach a `replanning` context to the
-request and solve again. Omitting it (the default, with `current_time` 0)
-behaves exactly like a first solve.
-
-```json
-{
-  "replanning": {
-    "current_time": 40,
-    "completed_task_ids": ["job1"],
-    "in_progress": [
-      {"task_id": "job2", "employee_id": "e1", "actual_start": 0, "remaining_minutes": 20}
-    ],
-    "committed": [
-      {"task_id": "job4", "employee_id": "e2", "start": 100}
-    ],
-    "previous_assignments": [
-      {"task_id": "job3", "employee_id": "e2", "start": 0}
-    ]
-  }
-}
-```
-
-- `current_time` is the new planning origin in minutes. No pending task starts
-  before `max(current_time, earliest_start)`, and nothing starts in the past.
-- `completed_task_ids` must refer to tasks still present in the request.
-  Completed tasks are excluded from assignments, unassigned entries, and all
-  objective metrics.
-- `in_progress` records keep their `actual_start` in the returned schedule;
-  `finish` is `current_time + remaining_minutes` and `duration` is the
-  remaining minutes, so full elapsed duration (`finish - actual_start`) is
-  distinguishable from remaining work. The employee reserves
-  `[current_time, current_time + remaining_minutes]`, not the original
-  duration. In-progress work is not rescheduled and its employee is kept even
-  if the task type's skills changed since it started (grandfathered); the
-  employee must still exist. An employee has at most one in-progress task.
-- `committed` tasks keep their fixed employee and future start (at or after
-  `current_time`); their duration comes from the employee's affinity and the
-  employee must still have the required skills.
-- Priority stages include the fixed finish of in-progress and committed work.
-  Fairness counts only remaining minutes for in-progress tasks plus the full
-  duration of pending and committed work; elapsed minutes are not load.
-- In-progress and committed intervals that overlap on one employee, unknown
-  task or employee references, duplicates across records, and execution-state
-  conflicts are rejected with validation errors before the solver runs.
-- With `previous_assignments`, a final STABILITY stage runs after fairness is
-  locked and minimizes the number of previous pending tasks whose employee or
-  start changed (one change per task, not duration weighted). The result
-  reports `stability` with `changed_tasks`, `unchanged_tasks`, and the change
-  list. Without previous assignments the stage is skipped.
-
-See `examples/replan.py` for a complete first-solve-then-replan script.
-
 ## Development
 
 ```sh
