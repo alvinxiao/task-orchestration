@@ -1,0 +1,8 @@
+ts	phase	decision	why	evidence	result
+2026-11-17T00:00:00Z	frame	Implement the approved specification with one code owner and independent parent verification	Keep the coupled schema and solver consistent	SPEC.md	planned
+2026-11-17T00:00:01Z	design	Use typed domain requests and results around one solve operation	Model the domain at the library and CLI boundary	docs/implementation-plan.md	chosen
+2026-11-18T01:20:11.3765994+00:00	audit	The first two timestamps were placeholders; historical exact times are unknown	Correct the record without inventing historical precision	decisions.tsv:2	supersedes timestamp claims in rows 2 and 3
+2026-11-18T01:20:11.3765994+00:00	implementation	Implemented typed models, solver, CLI and tests with OpenCode GLM	Build the approved project	SPEC.md	implemented
+2026-11-18T01:20:11.3765994+00:00	review	Resolved numeric, status, timing and test findings from independent Codex review	Verify observable behavior rather than trust passing baseline tests	tests/test_solver_contract.py	39 tests pass
+2026-11-18T01:20:11.3765994+00:00	verification	Built and installed the wheel in a fresh environment and ran the sample	Verify the distributed CLI artifact	docs/verification.md	OPTIMAL objective 52460
+2026-11-18T01:20:11.3765994+00:00	delivery	Split setup and implementation into stacked milestone PRs	User requested a commit and PR per major milestone	docs/implementation-plan.md	preparing
