@@ -1,0 +1,25 @@
+{
+  "employees": [
+    {"id": "e1", "name": "Ann", "skills": ["welding", "review"], "customer_affinities": {"c1": "HIGH", "c2": "NONE"}},
+    {"id": "e2", "name": "Bob", "skills": ["welding"], "customer_affinities": {"c1": "LOW"}},
+    {"id": "e3", "name": "Cid", "skills": ["drill", "review"], "customer_affinities": {}}
+  ],
+  "customers": [
+    {"id": "c1", "name": "Alpha Co"},
+    {"id": "c2", "name": "Beta Ltd"}
+  ],
+  "task_types": [
+    {"id": "t_weld", "base_duration": 30, "required_skills": ["welding"]},
+    {"id": "t_drill", "base_duration": 45, "required_skills": ["drill"]},
+    {"id": "t_audit", "base_duration": 20, "required_skills": ["review"]},
+    {"id": "t_solder", "base_duration": 15, "required_skills": ["soldering"]}
+  ],
+  "tasks": [
+    {"id": "task1", "task_type_id": "t_weld", "customer_id": "c1", "earliest_start": 0, "priority": "CRITICAL"},
+    {"id": "task2", "task_type_id": "t_weld", "customer_id": "c2", "earliest_start": 10, "priority": "LOW"},
+    {"id": "task3", "task_type_id": "t_drill", "customer_id": "c2", "earliest_start": 0, "priority": "HIGH"},
+    {"id": "task4", "task_type_id": "t_audit", "customer_id": "c1", "earliest_start": 5, "priority": "LOW"},
+    {"id": "task5", "task_type_id": "t_solder", "customer_id": "c1", "earliest_start": 0, "priority": "CRITICAL"}
+  ],
+  "options": {"time_limit_seconds": 5.0}
+}
