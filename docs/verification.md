@@ -10,6 +10,12 @@ The mixed weighted objective (squared finish costs plus 4/2/1 priority weights) 
 
 Tests migrated to an independent lexicographic oracle over exhaustive assignment and order enumeration comparing the tuple (critical, high, medium, low, squared loads) built from test-local literals. New cases prove a lower priority cannot worsen a higher aggregate, permutations are allowed at a fixed total, fairness only applies after all totals are locked, affinity changes assigned work minutes, a controlled FEASIBLE first stage stops provisional, a later UNKNOWN stage retains the prior incumbent, one shared budget covers setup and every stage, and validation runs per stage. No behavioral test was weakened; obsolete weighted-objective tests were replaced, not deleted.
 
+## Replanning round (2026-11-18, branch feat/operational-replanning)
+
+Added operational replanning: an additive typed `ReplanningContext` on the request (default `current_time=0`, so old requests validate and solve unchanged, stage list included), fixed intervals for in-progress and committed work, and an optional STABILITY stage. 69 tests pass (`uv run pytest -q`), including 24 new replanning cases at the public solve boundary: urgent arrival, no past starts, in-progress not rescheduled with actual start preserved, remaining-minute occupancy and remaining-only fairness, completed exclusion, committed locking, invalid execution states at the boundary, fixed-interval conflicts, stability after fairness is locked, old-request compatibility, and incumbent retention when a later stage hits the deadline. `uv run python examples/replan.py` runs the first-solve-then-replan example: the running task keeps its actual start with finish 60 and duration 20, the urgent CRITICAL job starts at current time 40 on the free employee, and stability reports the one pending job whose start changed. The rebuilt wheel smoke test and CLI sample still return OPTIMAL.
+
+Documented limits: in-progress skills are grandfathered (the employee must still exist); stability tracks only previous pending tasks; completed work contributes zero to all metrics by design; the stability stage locks nothing after itself because it is last.
+
 ## Deferred and documented limits
 
 - Returned schedules preserve the solver's chosen starts instead of post-hoc compaction, so every locked priority sum is preserved exactly. Proving a compaction retains locked sums was not needed because starts are preserved.
