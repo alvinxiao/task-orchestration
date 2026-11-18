@@ -16,9 +16,9 @@
   ],
   "tasks": [
     {"id": "task1", "task_type_id": "t_weld", "customer_id": "c1", "earliest_start": 0, "priority": "CRITICAL"},
-    {"id": "task2", "task_type_id": "t_weld", "customer_id": "c2", "earliest_start": 10, "priority": "MINOR"},
-    {"id": "task3", "task_type_id": "t_drill", "customer_id": "c2", "earliest_start": 0, "priority": "MAJOR"},
-    {"id": "task4", "task_type_id": "t_audit", "customer_id": "c1", "earliest_start": 5, "priority": "MINOR"},
+    {"id": "task2", "task_type_id": "t_weld", "customer_id": "c2", "earliest_start": 10, "priority": "LOW"},
+    {"id": "task3", "task_type_id": "t_drill", "customer_id": "c2", "earliest_start": 0, "priority": "HIGH"},
+    {"id": "task4", "task_type_id": "t_audit", "customer_id": "c1", "earliest_start": 5, "priority": "LOW"},
     {"id": "task5", "task_type_id": "t_solder", "customer_id": "c1", "earliest_start": 0, "priority": "CRITICAL"}
   ],
   "options": {"time_limit_seconds": 5.0}

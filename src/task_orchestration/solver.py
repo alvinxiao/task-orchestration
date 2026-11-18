@@ -8,13 +8,15 @@ from ortools.sat.python import cp_model
 from .domain import (
     AFFINITY_MULTIPLIER,
     DEFAULT_AFFINITY,
-    PRIORITY_WEIGHT,
+    PRIORITY_ORDER,
     Affinity,
     Employee,
     EmployeeSchedule,
-    ObjectiveComponents,
+    ObjectiveSummary,
     PlanningRequest,
+    Priority,
     SolveResult,
+    StageRecord,
     Task,
     TaskAssignment,
     TaskType,
@@ -31,6 +33,8 @@ _STATUS_NAMES = {
     cp_model.UNKNOWN: "UNKNOWN",
 }
 
+FAIRNESS_STAGE = "FAIRNESS"
+
 
 def _eligible_employees(task: Task, task_type: TaskType, employees: list[Employee]) -> list[Employee]:
     return [employee for employee in employees if task_type.required_skills <= employee.skills]
@@ -40,48 +44,78 @@ def _employee_affinity(employee: Employee, task: Task) -> Affinity:
     return employee.customer_affinities.get(task.customer_id, DEFAULT_AFFINITY)
 
 
-def _compact(
-    scheduled: list[tuple[str, int, int]], earliest_starts: dict[str, int]
-) -> list[TaskAssignment]:
-    ordered = sorted(scheduled, key=lambda item: item[1])
-    result: list[TaskAssignment] = []
-    now = 0
-    for task_id, solver_start, duration in ordered:
-        start = max(now, earliest_starts[task_id])
-        result.append(
-            TaskAssignment(task_id=task_id, start=start, finish=start + duration, duration=duration)
-        )
-        now = start + duration
-    return result
+def _stage_not_run(name: str) -> StageRecord:
+    return StageRecord(name=name, status="NOT_RUN", proven=False, value=None, bound=None)
+
+
+def _summary_from_schedule(
+    request: PlanningRequest,
+    schedules: list[EmployeeSchedule],
+    duration_by_task: dict[str, int],
+) -> ObjectiveSummary:
+    totals = {priority.value: 0 for priority in PRIORITY_ORDER}
+    priority_of = {task.id: task.priority.value for task in request.tasks}
+    for schedule in schedules:
+        for assignment in schedule.tasks:
+            totals[priority_of[assignment.task_id]] += assignment.finish
+    work_minutes = {}
+    squared = 0
+    for schedule in schedules:
+        load = sum(duration_by_task[assignment.task_id] for assignment in schedule.tasks)
+        work_minutes[schedule.employee_id] = load
+        squared += load**2
+    return ObjectiveSummary(
+        priority_completion_totals=totals,
+        employee_work_minutes=work_minutes,
+        squared_load_cost=squared,
+    )
 
 
 def solve(request: PlanningRequest) -> SolveResult:
-    """Solve a validated planning request. The single public solve operation."""
+    """Solve a validated planning request. The single public solve operation.
+
+    Strict lexicographic stages over priorities CRITICAL, HIGH, MEDIUM, LOW,
+    each minimizing the sum of assigned task finish times, then a final
+    fairness stage minimizing the sum of squared per-employee assigned work
+    minutes. Each stage runs to proven OPTIMAL before the next; a FEASIBLE or
+    UNKNOWN stage stops with a provisional result and the last incumbent.
+    """
     started = time.perf_counter()
 
-    def no_schedule(status="UNKNOWN", unassigned=()):
-        return SolveResult(
-            status=status, assignments=[], unassigned=list(unassigned), makespan=0,
-            objective=ObjectiveComponents(
-                squared_employee_finish_cost=0, weighted_task_completion_cost=0
-            ), best_bound=None, elapsed_seconds=time.perf_counter() - started,
-        )
+    def remaining():
+        return request.options.time_limit_seconds - (time.perf_counter() - started)
 
-    def expired():
-        return time.perf_counter() - started >= request.options.time_limit_seconds
+    stage_names = [priority.value for priority in PRIORITY_ORDER] + [FAIRNESS_STAGE]
+
+    def no_schedule(status="UNKNOWN", unassigned=(), records=None):
+        return SolveResult(
+            status=status,
+            provisional=True,
+            proven_priorities=[],
+            stages=records if records is not None else [_stage_not_run(name) for name in stage_names],
+            assignments=[],
+            unassigned=list(unassigned),
+            makespan=0,
+            objective=ObjectiveSummary(
+                priority_completion_totals={priority.value: 0 for priority in PRIORITY_ORDER},
+                employee_work_minutes={employee.id: 0 for employee in request.employees},
+                squared_load_cost=0,
+            ),
+            elapsed_seconds=time.perf_counter() - started,
+        )
 
     task_type_by_id = {task_type.id: task_type for task_type in request.task_types}
 
     eligible: dict[str, list[Employee]] = {}
     duration_of: dict[tuple[str, str], int] = {}
     for task in request.tasks:
-        if expired():
+        if remaining() <= 0:
             return no_schedule()
         task_type = task_type_by_id[task.task_type_id]
         candidates = _eligible_employees(task, task_type, request.employees)
         eligible[task.id] = candidates
         for employee in candidates:
-            if expired():
+            if remaining() <= 0:
                 return no_schedule()
             affinity = _employee_affinity(employee, task)
             duration_of[(task.id, employee.id)] = (
@@ -98,17 +132,18 @@ def solve(request: PlanningRequest) -> SolveResult:
         default=0,
     )
     horizon = max_release + sum(max_durations)
-    objective_bound = len(request.employees) * horizon**2 + sum(
-        PRIORITY_WEIGHT[task.priority] * horizon * len(eligible[task.id])
-        for task in request.tasks
-    )
-    if horizon**2 > _CP_SAT_MAX_INT // 2 or objective_bound > _CP_SAT_MAX_INT // 2:
-        raise ValueError("planning horizon and objective domains exceed CP-SAT integer limits")
+
+    load_bound = len(request.employees) * horizon**2
+    completion_bound = max(
+        (sum(1 for task in request.tasks if eligible[task.id] and task.priority == priority)
+         for priority in PRIORITY_ORDER),
+        default=0,
+    ) * horizon
+    if horizon**2 > _CP_SAT_MAX_INT // 2 or load_bound > _CP_SAT_MAX_INT // 2 or completion_bound > _CP_SAT_MAX_INT // 2:
+        raise ValueError("planning horizon and stage objective domains exceed CP-SAT integer limits")
 
     unassigned_pre: list[UnassignedTask] = []
     for task in request.tasks:
-        if expired():
-            return no_schedule()
         if not eligible[task.id]:
             if not request.employees:
                 unassigned_pre.append(UnassignedTask(task_id=task.id, reason="no employees defined"))
@@ -121,38 +156,32 @@ def solve(request: PlanningRequest) -> SolveResult:
                 )
 
     model = cp_model.CpModel()
-    employee_finish: dict[str, cp_model.IntVar] = {
-        employee.id: model.NewIntVar(0, horizon, f"employee_finish_{employee.id}")
-        for employee in request.employees
-    }
 
     presence_of: dict[str, list[tuple[Employee, cp_model.IntVar]]] = {}
     start_of: dict[tuple[str, str], cp_model.IntVar] = {}
     employee_intervals: dict[str, list[cp_model.IntervalVar]] = {}
-    weighted_costs: list[cp_model.IntVar] = []
+    task_finish: dict[str, cp_model.IntVar] = {}
+    load_of: dict[str, cp_model.IntVar] = {}
+    total_of: dict[str, cp_model.IntVar] = {}
+    squared_loads: list[cp_model.IntVar] = []
+    load_terms: dict[str, list] = {employee.id: [] for employee in request.employees}
 
     for task in request.tasks:
-        if expired():
-            return no_schedule()
         if not eligible[task.id]:
             continue
-        weight = PRIORITY_WEIGHT[task.priority]
+        finish = model.NewIntVar(task.earliest_start, horizon, f"finish_{task.id}")
+        task_finish[task.id] = finish
         for employee in eligible[task.id]:
-            if expired():
-                return no_schedule()
             duration = duration_of[(task.id, employee.id)]
             suffix = f"{task.id}_{employee.id}"
             presence = model.NewBoolVar(f"present_{suffix}")
             start = model.NewIntVar(task.earliest_start, horizon, f"start_{suffix}")
-            finish = model.NewIntVar(task.earliest_start + duration, horizon, f"finish_{suffix}")
+            pair_finish = model.NewIntVar(task.earliest_start + duration, horizon, f"pf_{suffix}")
             interval = model.NewOptionalIntervalVar(
-                start, duration, finish, presence, f"interval_{suffix}"
+                start, duration, pair_finish, presence, f"interval_{suffix}"
             )
-            model.Add(employee_finish[employee.id] >= finish).OnlyEnforceIf(presence)
-            weighted = model.NewIntVar(0, weight * horizon, f"weighted_{suffix}")
-            model.Add(weighted == weight * finish).OnlyEnforceIf(presence)
-            model.Add(weighted == 0).OnlyEnforceIf(presence.Not())
-            weighted_costs.append(weighted)
+            model.Add(finish == pair_finish).OnlyEnforceIf(presence)
+            load_terms[employee.id].append(duration * presence)
             employee_intervals.setdefault(employee.id, []).append(interval)
             presence_of.setdefault(task.id, []).append((employee, presence))
             start_of[(task.id, employee.id)] = start
@@ -160,70 +189,145 @@ def solve(request: PlanningRequest) -> SolveResult:
 
     for employee in request.employees:
         model.AddNoOverlap(employee_intervals.get(employee.id, []))
+        load = model.NewIntVar(0, horizon, f"load_{employee.id}")
+        model.Add(load == sum(load_terms[employee.id]))
+        load_of[employee.id] = load
+        squared = model.NewIntVar(0, horizon * horizon, f"squared_load_{employee.id}")
+        model.AddMultiplicationEquality(squared, [load, load])
+        squared_loads.append(squared)
 
-    squared_costs: list[cp_model.IntVar] = []
-    for employee in request.employees:
-        finish = employee_finish[employee.id]
-        squared = model.NewIntVar(0, horizon * horizon, f"squared_{employee.id}")
-        model.AddMultiplicationEquality(squared, [finish, finish])
-        squared_costs.append(squared)
+    for priority in PRIORITY_ORDER:
+        tasks_p = [
+            task for task in request.tasks
+            if eligible[task.id] and task.priority == priority
+        ]
+        total = model.NewIntVar(0, len(tasks_p) * horizon, f"total_{priority.value}")
+        model.Add(total == sum(task_finish[task.id] for task in tasks_p))
+        total_of[priority.value] = total
 
-    model.Minimize(sum(squared_costs) + sum(weighted_costs))
+    stage_vars: list[tuple[str, cp_model.IntVar | None]] = [
+        (priority.value, total_of[priority.value] if any(
+            eligible[task.id] and task.priority == priority for task in request.tasks
+        ) else None)
+        for priority in PRIORITY_ORDER
+    ]
+    fairness_objective = sum(squared_loads) if squared_loads else None
+    stage_vars.append((FAIRNESS_STAGE, fairness_objective))
 
-    validation_error = model.Validate()
-    if validation_error:
-        raise ValueError(f"invalid solver model or numeric bounds: {validation_error}")
-    if expired():
-        return no_schedule(unassigned=unassigned_pre)
+    records: list[StageRecord] = []
+    proven_priorities: list[str] = []
+    incumbent: tuple[list[EmployeeSchedule], int] | None = None
+    provisional = False
+
+    def extract() -> tuple[list[EmployeeSchedule], int]:
+        # Runs past the deadline once a stage solved: dropping the incumbent
+        # here would discard all proven work.
+        employee_schedules: list[EmployeeSchedule] = []
+        makespan = 0
+        scheduled_by_employee = {employee.id: [] for employee in request.employees}
+        for task in request.tasks:
+            for candidate, presence in presence_of.get(task.id, []):
+                if solver.Value(presence):
+                    duration = duration_of[(task.id, candidate.id)]
+                    start = solver.Value(start_of[(task.id, candidate.id)])
+                    scheduled_by_employee[candidate.id].append(
+                        TaskAssignment(
+                            task_id=task.id,
+                            start=start,
+                            finish=start + duration,
+                            duration=duration,
+                        )
+                    )
+        for employee in request.employees:
+            tasks = sorted(scheduled_by_employee[employee.id], key=lambda item: item.start)
+            if tasks:
+                makespan = max(makespan, tasks[-1].finish)
+            employee_schedules.append(EmployeeSchedule(employee_id=employee.id, tasks=tasks))
+        return employee_schedules, makespan
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = max(0.0, request.options.time_limit_seconds - (time.perf_counter() - started))
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
-    status_code = solver.Solve(model)
-    status = _STATUS_NAMES.get(status_code, "UNKNOWN")
-    if status not in ("OPTIMAL", "FEASIBLE"):
-        return no_schedule(status, unassigned_pre)
 
-    employee_schedules: list[EmployeeSchedule] = []
-    makespan = 0
-    earliest_starts = {task.id: task.earliest_start for task in request.tasks}
-    scheduled_by_employee = {employee.id: [] for employee in request.employees}
-    for task in request.tasks:
-        for candidate, presence in presence_of.get(task.id, []):
-            if expired():
-                return no_schedule(unassigned=unassigned_pre)
-            if solver.Value(presence):
-                scheduled_by_employee[candidate.id].append((
-                    task.id, solver.Value(start_of[(task.id, candidate.id)]),
-                    duration_of[(task.id, candidate.id)],
-                ))
-    for employee in request.employees:
-        if expired():
-            return no_schedule(unassigned=unassigned_pre)
-        compacted = _compact(scheduled_by_employee[employee.id], earliest_starts)
-        if compacted:
-            makespan = max(makespan, compacted[-1].finish)
-        employee_schedules.append(EmployeeSchedule(employee_id=employee.id, tasks=compacted))
+    for name, stage_objective in stage_vars:
+        if stage_objective is None:
+            records.append(StageRecord(name=name, status="OPTIMAL", proven=True, value=0, bound=0))
+            if name != FAIRNESS_STAGE:
+                proven_priorities.append(name)
+            continue
+        if remaining() <= 0:
+            records.append(_stage_not_run(name))
+            provisional = True
+            break
+        model.Minimize(stage_objective)
+        validation_error = model.Validate()
+        if validation_error:
+            raise ValueError(f"invalid solver model or numeric bounds: {validation_error}")
+        if remaining() <= 0:
+            records.append(_stage_not_run(name))
+            provisional = True
+            break
+        solver.parameters.max_time_in_seconds = remaining()
+        status_code = solver.Solve(model)
+        status = _STATUS_NAMES.get(status_code, "UNKNOWN")
+        if status == "OPTIMAL":
+            value = int(solver.Value(stage_objective))
+            records.append(StageRecord(name=name, status=status, proven=True, value=value, bound=value))
+            if name != FAIRNESS_STAGE:
+                proven_priorities.append(name)
+                model.Add(stage_objective == value)
+            incumbent = extract()
+            continue
+        if status == "FEASIBLE":
+            value = int(solver.Value(stage_objective))
+            bound = solver.BestObjectiveBound()
+            bound_record = int(bound) if abs(bound) < 2**53 else None
+            records.append(StageRecord(name=name, status=status, proven=False, value=value, bound=bound_record))
+            incumbent = extract()
+            provisional = True
+            break
+        records.append(StageRecord(name=name, status=status, proven=False, value=None, bound=None))
+        provisional = True
+        break
 
-    task_by_id = {task.id: task for task in request.tasks}
-    squared_total = sum(s.tasks[-1].finish**2 for s in employee_schedules if s.tasks)
-    weighted_total = sum(
-        PRIORITY_WEIGHT[task_by_id[a.task_id].priority] * a.finish
-        for s in employee_schedules
-        for a in s.tasks
-    )
+    if incumbent is None:
+        if not provisional:
+            # Every stage was trivially proven with nothing to schedule.
+            return SolveResult(
+                status="OPTIMAL",
+                provisional=False,
+                proven_priorities=proven_priorities,
+                stages=records,
+                assignments=[],
+                unassigned=unassigned_pre,
+                makespan=0,
+                objective=ObjectiveSummary(
+                    priority_completion_totals={priority.value: 0 for priority in PRIORITY_ORDER},
+                    employee_work_minutes={employee.id: 0 for employee in request.employees},
+                    squared_load_cost=0,
+                ),
+                elapsed_seconds=time.perf_counter() - started,
+            )
+        status_name = records[-1].status if records else "UNKNOWN"
+        return no_schedule(
+            status=status_name if status_name in ("INFEASIBLE", "MODEL_INVALID", "UNKNOWN") else "UNKNOWN",
+            unassigned=unassigned_pre,
+            records=records + [_stage_not_run(name) for name in stage_names[len(records):]],
+        )
 
+    schedules, makespan = incumbent
+    duration_by_task = {
+        assignment.task_id: assignment.duration
+        for schedule in schedules for assignment in schedule.tasks
+    }
     return SolveResult(
-        status=status,
-        assignments=employee_schedules,
+        status="OPTIMAL" if not provisional else "FEASIBLE",
+        provisional=provisional,
+        proven_priorities=proven_priorities,
+        stages=records + [_stage_not_run(name) for name in stage_names[len(records):]],
+        assignments=schedules,
         unassigned=unassigned_pre,
         makespan=makespan,
-        objective=ObjectiveComponents(
-            squared_employee_finish_cost=squared_total,
-            weighted_task_completion_cost=weighted_total,
-        ),
-        best_bound=(squared_total + weighted_total if status == "OPTIMAL" else
-                    int(solver.BestObjectiveBound()) if abs(solver.BestObjectiveBound()) < 2**53 else None),
+        objective=_summary_from_schedule(request, schedules, duration_by_task),
         elapsed_seconds=time.perf_counter() - started,
     )

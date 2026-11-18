@@ -1,13 +1,19 @@
 # Verification
 
-The completed implementation passed 39 tests with `uv run pytest -q` on Windows using CPython 3.12.16. `uv build` produced both a source distribution and a wheel. Installing that wheel into a fresh virtual environment and running `task-assign examples/sample.json` returned OPTIMAL with four assigned tasks, one skill-gap task, makespan 180, and objective 52460.
+Run on Windows with CPython 3.12 and uv at `%LOCALAPPDATA%\t3-tools\uv\uv.exe`.
 
-Tests cover reference affinity constants, skill eligibility, complete task coverage, sequencing, release times, independent exhaustive objective enumeration, malformed input, CLI errors, solver statuses, budget accounting, numeric overflow, and exact optimal bounds. Status and clock tests use controlled outcomes rather than relying on machine-speed-sensitive timeouts.
+2026-11-17: `uv run pytest -q` passes 45 tests on branch `feat/strict-priority-scheduling`. `uv run task-assign examples/sample.json` returns OPTIMAL, provisional false, proven priorities CRITICAL, HIGH, MEDIUM, LOW, makespan 180, stage values 30/180/0/180 and fairness 49300. The rebuilt wheel installed in a fresh virtual environment returns the same status and makespan via the installed `task-assign` CLI.
 
-An independent gpt-6.1-sol review found unsafe numeric domains, an arbitrary horizon cap, missing status and budget tests, incomplete elapsed-time reporting, and floating-point bound precision loss. These findings were fixed and covered by regression tests. The reviewer also identified incomplete audit records and narration comments; the trail now records the work and the comments were removed. The final fixes were verified by the parent agent, not a second independent review.
+## What this round changed
 
-The objective-distinction fixture chooses a makespan of 120 with objective 14540 over a feasible makespan of 100 with objective 16580. This proves the reference squared-finish objective differs from minimizing makespan alone.
+The mixed weighted objective (squared finish costs plus 4/2/1 priority weights) was replaced by strict lexicographic scheduling: CRITICAL, HIGH, MEDIUM, LOW stages each minimize their priority's total completion time, run to proven OPTIMAL, and lock the exact integer value before the next stage. A final fairness stage minimizes the sum of squared per-employee assigned work minutes among schedules that keep every locked total. Priorities are canonical CRITICAL, HIGH, MEDIUM, LOW; legacy MAJOR and MINOR inputs normalize to HIGH and LOW at the input boundary, and the arbitrary PRIORITY_WEIGHT export was removed.
 
-The Timefold stable branch resolved to `6ff62a145ce7f691dde1304a530de60ad24898d9` when recorded after implementation. Initial research used the moving stable branch; its historical commit was not captured then.
+Tests migrated to an independent lexicographic oracle over exhaustive assignment and order enumeration comparing the tuple (critical, high, medium, low, squared loads) built from test-local literals. New cases prove a lower priority cannot worsen a higher aggregate, permutations are allowed at a fixed total, fairness only applies after all totals are locked, affinity changes assigned work minutes, a controlled FEASIBLE first stage stops provisional, a later UNKNOWN stage retains the prior incumbent, one shared budget covers setup and every stage, and validation runs per stage. No behavioral test was weakened; obsolete weighted-objective tests were replaced, not deleted.
 
-The time budget is cooperative. Individual operations and solver calls can overrun it. Feasible lower bounds outside the floating-point API's exact integer range are omitted. No performance claims are made.
+## Deferred and documented limits
+
+- Returned schedules preserve the solver's chosen starts instead of post-hoc compaction, so every locked priority sum is preserved exactly. Proving a compaction retains locked sums was not needed because starts are preserved.
+- Fairness treats employee capacity as equal. Normalizing loads by actual capacity is deferred until shifts or calendars exist.
+- Extraction runs past the deadline once a stage has solved; dropping the incumbent there would discard all proven work. This cooperative-budget overhead is documented in the README.
+- A non-proven stage's bound passes through the floating-point solver API and is conservative; proven stages report exact integer values and bounds.
+- The wheel was rebuilt with `uv build` and the installed `task-assign examples/sample.json` CLI run from a fresh virtual environment returned OPTIMAL, provisional false, makespan 180.

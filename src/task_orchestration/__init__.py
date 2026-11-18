@@ -1,7 +1,8 @@
 
 from .domain import (
     AFFINITY_MULTIPLIER,
-    PRIORITY_WEIGHT,
+    PRIORITY_ALIASES,
+    PRIORITY_ORDER,
     Affinity,
     Customer,
     Employee,
@@ -9,6 +10,7 @@ from .domain import (
     Priority,
     SolveOptions,
     SolveResult,
+    StageRecord,
     Task,
     TaskType,
 )
@@ -16,7 +18,8 @@ from .solver import solve
 
 __all__ = [
     "AFFINITY_MULTIPLIER",
-    "PRIORITY_WEIGHT",
+    "PRIORITY_ALIASES",
+    "PRIORITY_ORDER",
     "Affinity",
     "Customer",
     "Employee",
@@ -24,6 +27,7 @@ __all__ = [
     "Priority",
     "SolveOptions",
     "SolveResult",
+    "StageRecord",
     "Task",
     "TaskType",
     "solve",

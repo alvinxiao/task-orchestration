@@ -23,14 +23,21 @@ DEFAULT_AFFINITY = Affinity.NONE
 
 class Priority(StrEnum):
     CRITICAL = "CRITICAL"
-    MAJOR = "MAJOR"
-    MINOR = "MINOR"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
 
 
-PRIORITY_WEIGHT = {
-    Priority.CRITICAL: 4,
-    Priority.MAJOR: 2,
-    Priority.MINOR: 1,
+PRIORITY_ORDER = [
+    Priority.CRITICAL,
+    Priority.HIGH,
+    Priority.MEDIUM,
+    Priority.LOW,
+]
+
+PRIORITY_ALIASES = {
+    "MAJOR": Priority.HIGH,
+    "MINOR": Priority.LOW,
 }
 
 
@@ -58,6 +65,13 @@ class Task(BaseModel):
     customer_id: str = Field(min_length=1)
     earliest_start: int = Field(strict=True, ge=0)
     priority: Priority
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _normalize_priority(cls, value):
+        if isinstance(value, str):
+            return PRIORITY_ALIASES.get(value, value)
+        return value
 
 
 class SolveOptions(BaseModel):
@@ -116,16 +130,27 @@ class UnassignedTask(BaseModel):
     reason: str
 
 
-class ObjectiveComponents(BaseModel):
-    squared_employee_finish_cost: int
-    weighted_task_completion_cost: int
+class StageRecord(BaseModel):
+    name: str
+    status: str
+    proven: bool
+    value: int | None
+    bound: int | None
+
+
+class ObjectiveSummary(BaseModel):
+    priority_completion_totals: dict[str, int]
+    employee_work_minutes: dict[str, int]
+    squared_load_cost: int
 
 
 class SolveResult(BaseModel):
     status: str
+    provisional: bool
+    proven_priorities: list[str]
+    stages: list[StageRecord]
     assignments: list[EmployeeSchedule]
     unassigned: list[UnassignedTask]
     makespan: int
-    objective: ObjectiveComponents
-    best_bound: int | None
+    objective: ObjectiveSummary
     elapsed_seconds: float

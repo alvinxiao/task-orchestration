@@ -14,7 +14,7 @@ from task_orchestration import (
 
 
 AFFINITY_MULTIPLIER = {"NONE": 4, "LOW": 3, "MEDIUM": 2, "HIGH": 1}
-PRIORITY_WEIGHT = {"CRITICAL": 4, "MAJOR": 2, "MINOR": 1}
+PRIORITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
 def make_request(employees, customers, task_types, tasks, time_limit=10.0):
     return PlanningRequest(
@@ -26,22 +26,31 @@ def make_request(employees, customers, task_types, tasks, time_limit=10.0):
     )
 
 
+def lexicographic_tuple(totals_by_priority, squared_load_cost):
+    """Independent lexicographic objective: per-priority completion totals
+    in strict order CRITICAL, HIGH, MEDIUM, LOW, then squared load cost."""
+    return tuple(totals_by_priority[priority] for priority in PRIORITY_ORDER) + (squared_load_cost,)
+
+
 def evaluate(schedule_by_employee, durations):
+    """Return (per-priority completion totals, squared load cost) for one
+    candidate assignment and ordering, left-shifted per employee."""
+    totals = {priority: 0 for priority in PRIORITY_ORDER}
     squared = 0
-    weighted = 0
     for tasks in schedule_by_employee.values():
         now = 0
-        last_finish = 0
+        load = 0
         for task in tasks:
             start = max(now, task.earliest_start)
             now = start + durations[task.id]
-            last_finish = now
-            weighted += PRIORITY_WEIGHT[task.priority] * now
-        squared += last_finish**2
-    return squared, weighted
+            load += durations[task.id]
+            totals[task.priority] += now
+        squared += load**2
+    return totals, squared
 
 
 def brute_force_optimum(request):
+    """Minimum lexicographic tuple over every assignment and ordering."""
     task_types = {task_type.id: task_type for task_type in request.task_types}
     durations = {}
     eligible: dict[str, list[str]] = {}
@@ -73,8 +82,13 @@ def brute_force_optimum(request):
                 for employee_id, group in schedule.items()
                 for task in group
             }
-            squared, weighted = evaluate(schedule, candidate_durations)
-            total = squared + weighted
-            if best is None or total < best:
-                best = total
+            totals, squared = evaluate(schedule, candidate_durations)
+            candidate = lexicographic_tuple(totals, squared)
+            if best is None or candidate < best:
+                best = candidate
     return best
+
+
+def result_lexicographic(result):
+    totals = result.objective.priority_completion_totals
+    return lexicographic_tuple(totals, result.objective.squared_load_cost)

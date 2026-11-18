@@ -10,7 +10,7 @@ Build a Python project that assigns tasks to qualified employees and orders thei
 
 Provide a Python library and a small JSON command-line interface backed by OR-Tools CP-SAT. Given employees, skills, customers, task types, and tasks, return each employee's ordered schedule, task start and finish times, unassigned tasks, and objective metrics. Include a runnable example and installation instructions.
 
-Preserve the reference's scheduling rules and default objective. A browser interface and hosted service can follow separately.
+Preserve the reference's scheduling rules. The objective is the user-requested strict lexicographic priority policy with squared-load fairness, replacing the reference's mixed weighted cost. A browser interface and hosted service can follow separately.
 
 ## User Stories
 
@@ -23,7 +23,7 @@ Preserve the reference's scheduling rules and default objective. A browser inter
 7. As a planner, I want missing affinity to use the documented default, so that incomplete preference data has predictable behavior.
 8. As a planner, I want to create tasks with stable identifiers, so that I can match results to inputs.
 9. As a planner, I want to set earliest start times, so that tasks cannot begin before they are ready.
-10. As a planner, I want critical, major, and minor priorities, so that urgent work receives greater emphasis.
+10. As a planner, I want CRITICAL, HIGH, MEDIUM, and LOW priorities, so that urgent work receives greater emphasis; legacy MAJOR and MINOR inputs are accepted as HIGH and LOW.
 11. As a planner, I want each task assigned at most once, so that work is not duplicated.
 12. As a planner, I want employee tasks to run without overlap, so that the schedule is executable.
 13. As a planner, I want tasks to run to completion, so that the plan does not assume interruptions.
@@ -49,12 +49,11 @@ Preserve the reference's scheduling rules and default objective. A browser inter
 - Validate unique IDs, references, enums, integer ranges, and positive solve limits at the input boundary. Reject invalid data with field-specific errors before invoking CP-SAT.
 - Use integer minutes relative to a shared planning origin. Match the reference affinity multipliers: NONE=4, LOW=3, MEDIUM=2, HIGH=1. Missing employee/customer affinity means NONE. Duration equals base duration multiplied by affinity.
 - Create optional intervals only for qualified task/employee pairs. Exactly one eligible interval is present for each assignable task. Tasks with no eligible employees remain explicitly unassigned. Enforce employee no-overlap and task earliest starts.
-- This initial model has no deadline, capacity horizon, or employee calendar. Therefore every task with an eligible employee can be assigned. Fixing these assignments' presence preserves the reference's medium-level objective without a separate optimization phase. Revisit this decision if constraints later make eligible tasks mutually infeasible.
-- Derive a safe horizon from the maximum earliest start plus the sum of maximum eligible task durations. Check bounds, including squared objective terms, against CP-SAT integer limits. Do not use an arbitrary short horizon that silently discards work.
-- Preserve the reference default soft cost: sum of squared employee finish times plus the sum of assigned task finish times weighted 4 for CRITICAL, 2 for MAJOR, and 1 for MINOR. Empty employees finish at zero. Model squares with bounded integer multiplication constraints.
-- Report actual makespan as the maximum employee finish separately. The reference's constraint named "Minimize makespan" uses a squared-finish sum, not this maximum. Do not silently replace its objective with pure makespan minimization.
-- Return tasks sorted by start for each employee. Compact each sequence to earliest feasible starts before returning it, matching the reference sequence semantics; recompute all reported metrics from the returned schedule.
-- Return assignments, unassigned IDs and reasons, makespan, objective components, elapsed solve time, solver status, and optimality information. Preserve OPTIMAL, FEASIBLE, INFEASIBLE, MODEL_INVALID, and UNKNOWN distinctions. Return no invented schedule when the solver has no incumbent. An UNKNOWN result is not proof of infeasibility.
+- This initial model has no deadline, capacity horizon, or employee calendar. Therefore every task with an eligible employee can be assigned, and the model forces all of them present without a separate feasibility phase. Revisit this decision if constraints later make eligible tasks mutually infeasible.
+- Derive a safe horizon from the maximum earliest start plus the sum of maximum eligible task durations. Check bounds, including squared load terms and per-priority completion totals, against CP-SAT integer limits. Do not use an arbitrary short horizon that silently discards work.
+- Schedule by strict lexicographic priority over CRITICAL, HIGH, MEDIUM, LOW. Each stage minimizes that priority's total completion time (the sum of assigned tasks' finish times) and runs to proven OPTIMAL before an equality locks its exact integer value. Empty stages are trivially proven zero. A FEASIBLE stage stops the sequence as provisional without advancing; an UNKNOWN or expired stage keeps the last incumbent and stops as provisional. A final fairness stage minimizes the sum of squared per-employee assigned work minutes among schedules that keep every locked total. Employee capacity is treated as equal; normalizing loads by actual capacity is deferred until shifts exist.
+- Preserve the solver's chosen starts when returning a schedule instead of compacting them, so no post-processing can change a locked priority total. Recompute all reported metrics from the returned schedule.
+- Return assignments, unassigned IDs and reasons, makespan, per-priority completion totals, per-employee work minutes, the squared load cost, one stage record per objective (name, status, proven flag, optional value and bound), a proven priority prefix, a provisional flag, and elapsed solve time. Preserve OPTIMAL, FEASIBLE, INFEASIBLE, MODEL_INVALID, and UNKNOWN distinctions. Return no invented schedule when the solver has no incumbent. An UNKNOWN result is not proof of infeasibility, and a provisional result is not a strict lexicographic optimum.
 - Use a single total time budget. Document reproducibility settings for development, without promising identical tied schedules across solver versions.
 - Include a sample exercising multiple skills, affinities, priorities, release times, and an unassignable task. Document installation, library use, CLI use, and result interpretation.
 
@@ -63,9 +62,10 @@ Preserve the reference's scheduling rules and default objective. A browser inter
 - Approved primary test boundary: the public solve operation, from validated planning request to observable schedule/result.
 - Test external behavior, not variable names, internal model construction, or a particular tied solution. Run the real CP-SAT solver for scheduling acceptance tests.
 - Verify every returned assignment has all required skills, appears once, starts after release, has the correct affinity-dependent duration, and does not overlap another task for that employee.
-- Use tiny exhaustive assignment/order enumeration as an independent oracle for the objective. Check squared employee finish costs and priority-weighted completion costs, including a case that distinguishes this objective from pure makespan.
+- Use tiny exhaustive assignment/order enumeration as an independent oracle for the lexicographic objective: the tuple of per-priority completion totals in strict CRITICAL, HIGH, MEDIUM, LOW order followed by the squared load cost, with test-local literals rather than production constants. Include a case that proves a lower priority cannot worsen a higher priority's aggregate, and one that proves permutations are allowed when totals are fixed.
+- Prove stage behavior with controlled solver outcomes: a FEASIBLE first stage stops provisional, a later UNKNOWN stage retains the prior incumbent, one shared budget covers setup and all stages, empty and no-eligible cases are trivially proven, affinity changes assigned work minutes, and fairness only applies after every priority total is locked.
 - Cover missing affinity, all affinity levels, employee idle time, unassignable tasks, no employees, no tasks, and multiple optimal schedules.
-- Check malformed references, duplicate identifiers, invalid durations/priorities, and unsafe numeric bounds through the same public boundary.
+- Check malformed references, duplicate identifiers, invalid durations/priorities, legacy priority aliases, and unsafe numeric bounds through the same public boundary.
 - Verify result status handling without timing-sensitive expectations. Exercise status translation with controlled outcomes where actual solver timeouts would be flaky. Never require a machine to reach a particular status in a few milliseconds.
 - Add one CLI smoke test that reads the example and checks parseable output. Keep domain assertions at the solve boundary.
 - There is no local test prior art. The reference repository separates constraint-provider tests, validation tests, and integration tests; use its behavioral cases as guidance without copying Java-specific test structure.
